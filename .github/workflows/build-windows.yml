@@ -1,0 +1,45 @@
+name: Build PLaMo3 Windows CPU
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-windows.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout llama.cpp v0.9.0
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: v0.9.0
+          path: llama.cpp
+      - name: Configure MSVC x64 CPU build
+        shell: pwsh
+        run: |
+          cmake -S llama.cpp -B build -G "Visual Studio 17 2022" -A x64 `
+            -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TESTS=OFF `
+            -DLLAMA_CURL=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF `
+            -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON `
+            -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_AVX512=OFF
+      - name: Build Release
+        run: cmake --build build --config Release --target llama-server --parallel 4
+      - name: Package engine
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exe = Get-ChildItem build -Recurse -Filter llama-server.exe | Where-Object { $_.FullName -match 'Release' } | Select-Object -First 1
+          if (-not $exe) { throw 'llama-server.exe missing' }
+          Copy-Item $exe.FullName dist/
+          Get-ChildItem build -Recurse -Filter '*.dll' | Where-Object { $_.FullName -match 'Release' } | ForEach-Object { Copy-Item $_.FullName dist/ -Force }
+          if (-not (Test-Path dist/llama.dll)) { throw 'llama.dll missing' }
+          Compress-Archive -Path dist/* -DestinationPath PLaMo3-Windows-CPU-x64.zip
+      - name: Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLaMo3-Windows-CPU-x64
+          path: PLaMo3-Windows-CPU-x64.zip
+          retention-days: 30
