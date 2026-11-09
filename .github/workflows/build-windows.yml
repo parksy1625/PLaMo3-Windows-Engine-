@@ -42,11 +42,20 @@ jobs:
           if ($cache -notmatch '/MT') { throw 'Static runtime flag /MT absent from CMake cache' }
       - name: Build Release
         run: cmake --build build --config Release --target llama-server --parallel 4
-      - name: Install OpenSSL runtime libraries
+      - name: Restore verified OpenSSL DLLs from previous successful artifact
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          & C:/vcpkg/vcpkg.exe install openssl:x64-windows
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg OpenSSL install failed" }
+          New-Item -ItemType Directory -Force -Path previous | Out-Null
+          gh run download 42558787882 --repo ${{ github.repository }} --name PLaMo3-Windows-CPU-x64 --dir previous
+          $zip = Get-ChildItem previous -Recurse -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'Prior engine ZIP not found' }
+          Expand-Archive $zip.FullName -DestinationPath previous-engine -Force
+          foreach ($name in @('libssl-3-x64.dll','libcrypto-3-x64.dll')) {
+            $file = Get-ChildItem previous-engine -Recurse -Filter $name | Select-Object -First 1
+            if (-not $file) { throw "Missing $name in prior artifact" }
+          }
       - name: Package engine
         shell: pwsh
         run: |
@@ -57,14 +66,10 @@ jobs:
           Get-ChildItem build -Recurse -Filter '*.dll' | Where-Object { $_.FullName -match 'Release' } | ForEach-Object { Copy-Item $_.FullName dist/ -Force }
           if (-not (Test-Path dist/llama.dll)) { throw 'llama.dll missing' }
           # Require and bundle the exact DLLs missing on Windows LTSC.
-          $vcpkgBin = 'C:/vcpkg/installed/x64-windows/bin'
           foreach ($name in @('libssl-3-x64.dll', 'libcrypto-3-x64.dll')) {
-            $candidate = Join-Path $vcpkgBin $name
-            if (-not (Test-Path $candidate)) { throw "Missing required runtime DLL: $candidate" }
-            Copy-Item $candidate dist/ -Force
+            $file = Get-ChildItem previous-engine -Recurse -Filter $name | Select-Object -First 1
+            Copy-Item $file.FullName dist/ -Force
           }
-          $zlib = Join-Path $vcpkgBin 'zlib1.dll'
-          if (Test-Path $zlib) { Copy-Item $zlib dist/ -Force }
           # Run from the distribution folder to catch missing runtime dependencies.
           Push-Location dist
           try {
