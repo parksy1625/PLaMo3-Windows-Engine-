@@ -11,6 +11,10 @@ jobs:
   build:
     runs-on: windows-2022
     steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: app
       - name: Checkout llama.cpp v0.9.0
         uses: actions/checkout@v4
         with:
@@ -64,6 +68,55 @@ jobs:
             if (-not (Test-Path (Join-Path dist $name))) { throw "Missing: $name" }
           }
           Get-ChildItem dist | Select-Object Name,Length | Format-Table
+      - name: Assemble full offline translator and split for email
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path full/engine,full/model,full/web,full/logs | Out-Null
+          Copy-Item dist/* full/engine/ -Force
+          Copy-Item app/web/translator.html full/web/translator.html
+          Set-Content full/model/PUT_GGUF_HERE.txt 'Put your existing PLaMo3 GGUF here.' -Encoding ascii
+          $start = @'
+          @echo off
+          setlocal EnableExtensions
+          cd /d "%~dp0"
+          if not exist logs mkdir logs
+          set "MODEL="
+          for /f "delims=" %%F in ('dir /b /a-d "model\*.gguf" 2^>nul') do if not defined MODEL set "MODEL=%~dp0model\%%F"
+          if not defined MODEL (
+            echo GGUF file missing in model folder
+            pause
+            exit /b 1
+          )
+          echo Starting offline translation server...
+          "%~dp0engine\llama-server.exe" -m "%MODEL%" --host 127.0.0.1 --port 8080 -c 2048 -t 4 --path "%~dp0web" > "%~dp0logs\server.log" 2>&1
+          echo Server exited with code %ERRORLEVEL%
+          type "%~dp0logs\server.log"
+          pause
+          '@
+          Set-Content full/START_TRANSLATOR.bat $start -Encoding ascii
+          Set-Content full/TEST_ENGINE.bat '@echo off' -Encoding ascii
+          Add-Content full/TEST_ENGINE.bat '"%~dp0engine\llama-server.exe" --version' -Encoding ascii
+          Add-Content full/TEST_ENGINE.bat 'pause' -Encoding ascii
+          Compress-Archive -Path full/* -DestinationPath PLaMo3-Complete.zip
+          $bytes = [System.IO.File]::ReadAllBytes((Join-Path $PWD 'PLaMo3-Complete.zip'))
+          $mid = [int][Math]::Ceiling($bytes.Length / 2)
+          if ($mid -gt 9900000) { throw "Each split exceeds 10MB: $mid" }
+          [System.IO.File]::WriteAllBytes((Join-Path $PWD 'PLaMo3-Complete.part01.zipp'),$bytes[0..($mid-1)])
+          [System.IO.File]::WriteAllBytes((Join-Path $PWD 'PLaMo3-Complete.part02.zipp'),$bytes[$mid..($bytes.Length-1)])
+          $merger = @'
+          <!doctype html><html lang="ko"><meta charset="utf-8"><title>ZIPP 합치기</title><h2>오프라인 ZIP 합치기</h2><p>1번과 2번 zipp 파일을 순서대로 선택하세요.</p><input id="a" type="file" accept=".zipp"><input id="b" type="file" accept=".zipp"><button onclick="go()">ZIP 합치기</button><p id="s"></p><script>async function go(){let a=document.getElementById('a').files[0],b=document.getElementById('b').files[0];if(!a||!b)return alert('두 파일을 선택하세요');let x=new Blob([await a.arrayBuffer(),await b.arrayBuffer()],{type:'application/zip'}),u=URL.createObjectURL(x),l=document.createElement('a');l.href=u;l.download='PLaMo3-Complete.zip';l.click();setTimeout(()=>URL.revokeObjectURL(u),60000);document.getElementById('s').textContent='완료'}</script></html>
+          '@
+          Set-Content PLaMo3-ZIPP-Merger.html $merger -Encoding utf8
+      - name: Upload complete application and email parts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLaMo3-Complete-and-ZIPP
+          path: |
+            PLaMo3-Complete.zip
+            PLaMo3-Complete.part01.zipp
+            PLaMo3-Complete.part02.zipp
+            PLaMo3-ZIPP-Merger.html
+          retention-days: 30
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
