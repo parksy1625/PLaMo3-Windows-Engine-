@@ -27,6 +27,11 @@ jobs:
             -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_AVX512=OFF
       - name: Build Release
         run: cmake --build build --config Release --target llama-server --parallel 4
+      - name: Install OpenSSL runtime libraries
+        shell: pwsh
+        run: |
+          & C:/vcpkg/vcpkg.exe install openssl:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg OpenSSL install failed" }
       - name: Package engine
         shell: pwsh
         run: |
@@ -36,18 +41,15 @@ jobs:
           Copy-Item $exe.FullName dist/
           Get-ChildItem build -Recurse -Filter '*.dll' | Where-Object { $_.FullName -match 'Release' } | ForEach-Object { Copy-Item $_.FullName dist/ -Force }
           if (-not (Test-Path dist/llama.dll)) { throw 'llama.dll missing' }
-          # Copy third-party runtime DLLs from the runner's vcpkg installation.
+          # Require and bundle the exact DLLs missing on Windows LTSC.
           $vcpkgBin = 'C:/vcpkg/installed/x64-windows/bin'
-          foreach ($name in @('libssl-3-x64.dll', 'libcrypto-3-x64.dll', 'zlib1.dll')) {
-            $candidate = Join-Path $vcpkgBin $name
-            if (Test-Path $candidate) { Copy-Item $candidate dist/ -Force }
-          }
           foreach ($name in @('libssl-3-x64.dll', 'libcrypto-3-x64.dll')) {
-            if (-not (Test-Path (Join-Path dist $name))) {
-              $candidate = Get-ChildItem 'C:/vcpkg' -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
-              if ($candidate) { Copy-Item $candidate.FullName dist/ -Force }
-            }
+            $candidate = Join-Path $vcpkgBin $name
+            if (-not (Test-Path $candidate)) { throw "Missing required runtime DLL: $candidate" }
+            Copy-Item $candidate dist/ -Force
           }
+          $zlib = Join-Path $vcpkgBin 'zlib1.dll'
+          if (Test-Path $zlib) { Copy-Item $zlib dist/ -Force }
           # Run from the distribution folder to catch missing runtime dependencies.
           Push-Location dist
           try {
