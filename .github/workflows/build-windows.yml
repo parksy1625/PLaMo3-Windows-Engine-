@@ -36,6 +36,24 @@ jobs:
           Copy-Item $exe.FullName dist/
           Get-ChildItem build -Recurse -Filter '*.dll' | Where-Object { $_.FullName -match 'Release' } | ForEach-Object { Copy-Item $_.FullName dist/ -Force }
           if (-not (Test-Path dist/llama.dll)) { throw 'llama.dll missing' }
+          # Copy third-party runtime DLLs from the runner's vcpkg installation.
+          $vcpkgBin = 'C:/vcpkg/installed/x64-windows/bin'
+          foreach ($name in @('libssl-3-x64.dll', 'libcrypto-3-x64.dll', 'zlib1.dll')) {
+            $candidate = Join-Path $vcpkgBin $name
+            if (Test-Path $candidate) { Copy-Item $candidate dist/ -Force }
+          }
+          foreach ($name in @('libssl-3-x64.dll', 'libcrypto-3-x64.dll')) {
+            if (-not (Test-Path (Join-Path dist $name))) {
+              $candidate = Get-ChildItem 'C:/vcpkg' -Recurse -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($candidate) { Copy-Item $candidate.FullName dist/ -Force }
+            }
+          }
+          # Run from the distribution folder to catch missing runtime dependencies.
+          Push-Location dist
+          try {
+            & ./llama-server.exe --help *> ../startup-check.txt
+            if ($LASTEXITCODE -ne 0) { Get-Content ../startup-check.txt -Tail 60; throw "Server smoke test failed with exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
           Compress-Archive -Path dist/* -DestinationPath PLaMo3-Windows-CPU-x64.zip
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
