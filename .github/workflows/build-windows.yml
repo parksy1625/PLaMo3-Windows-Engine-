@@ -76,7 +76,7 @@ jobs:
             & ./llama-server.exe --help *> ../startup-check.txt
             if ($LASTEXITCODE -ne 0) { Get-Content ../startup-check.txt -Tail 60; throw "Server smoke test failed with exit code $LASTEXITCODE" }
           } finally { Pop-Location }
-          & ./llama-server.exe --version *> ../version-check.txt
+          & ./dist/llama-server.exe --version *> version-check.txt
           if ($LASTEXITCODE -ne 0) { throw "Version smoke test failed: $LASTEXITCODE" }
           Compress-Archive -Path dist/* -DestinationPath PLaMo3-Windows-CPU-x64.zip
       - name: Verify distribution DLL inventory
