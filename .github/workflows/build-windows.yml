@@ -1,4 +1,4 @@
-name: Build PLaMo3 Windows CPU
+name: Build PLaMo3 Windows LTSC Static CRT
 on:
   workflow_dispatch:
   push:
@@ -28,7 +28,18 @@ jobs:
             -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TESTS=OFF `
             -DLLAMA_CURL=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF `
             -DGGML_NATIVE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF `
-            -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_AVX512=OFF
+            -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_AVX512=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DGGML_OPENMP=OFF `
+            -DCMAKE_C_FLAGS_RELEASE="/O2 /DNDEBUG /MT" `
+            -DCMAKE_CXX_FLAGS_RELEASE="/O2 /DNDEBUG /MT"
+      - name: Verify MSVC static runtime configuration
+        shell: pwsh
+        run: |
+          $cache = Get-Content build/CMakeCache.txt -Raw
+          if ($cache -notmatch 'CMAKE_MSVC_RUNTIME_LIBRARY:UNINITIALIZED=MultiThreaded' -and $cache -notmatch 'CMAKE_MSVC_RUNTIME_LIBRARY:STRING=MultiThreaded') {
+            Write-Host 'Checking compiler flags instead'
+          }
+          if ($cache -notmatch '/MT') { throw 'Static runtime flag /MT absent from CMake cache' }
       - name: Build Release
         run: cmake --build build --config Release --target llama-server --parallel 4
       - name: Install OpenSSL runtime libraries
@@ -60,6 +71,8 @@ jobs:
             & ./llama-server.exe --help *> ../startup-check.txt
             if ($LASTEXITCODE -ne 0) { Get-Content ../startup-check.txt -Tail 60; throw "Server smoke test failed with exit code $LASTEXITCODE" }
           } finally { Pop-Location }
+          & ./llama-server.exe --version *> ../version-check.txt
+          if ($LASTEXITCODE -ne 0) { throw "Version smoke test failed: $LASTEXITCODE" }
           Compress-Archive -Path dist/* -DestinationPath PLaMo3-Windows-CPU-x64.zip
       - name: Verify distribution DLL inventory
         shell: pwsh
@@ -97,6 +110,27 @@ jobs:
           Set-Content full/TEST_ENGINE.bat '@echo off' -Encoding ascii
           Add-Content full/TEST_ENGINE.bat '"%~dp0engine\llama-server.exe" --version' -Encoding ascii
           Add-Content full/TEST_ENGINE.bat 'pause' -Encoding ascii
+          $diag = @'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          if not exist logs mkdir logs
+          echo PLaMo3 Windows diagnostic > logs\diagnostic.txt
+          ver >> logs\diagnostic.txt
+          echo === Engine version (no model) === >> logs\diagnostic.txt
+          engine\llama-server.exe --version >> logs\diagnostic.txt 2>&1
+          echo Exit code: %ERRORLEVEL% >> logs\diagnostic.txt
+          echo === Engine help (no model) === >> logs\diagnostic.txt
+          engine\llama-server.exe --help >> logs\diagnostic.txt 2>&1
+          echo Exit code: %ERRORLEVEL% >> logs\diagnostic.txt
+          echo === Engine files === >> logs\diagnostic.txt
+          dir /b engine >> logs\diagnostic.txt
+          echo === Recent Windows crash events === >> logs\diagnostic.txt
+          powershell -NoProfile -Command "Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001; StartTime=(Get-Date).AddDays(-2)} -MaxEvents 10 -ErrorAction SilentlyContinue | Format-List TimeCreated,Id,ProviderName,Message" >> logs\diagnostic.txt 2>&1
+          echo Done: logs\diagnostic.txt
+          pause
+          '@
+          Set-Content full/DIAGNOSE.bat $diag -Encoding ascii
           Compress-Archive -Path full/* -DestinationPath PLaMo3-Complete.zip
           $bytes = [System.IO.File]::ReadAllBytes((Join-Path $PWD 'PLaMo3-Complete.zip'))
           $mid = [int][Math]::Ceiling($bytes.Length / 2)
