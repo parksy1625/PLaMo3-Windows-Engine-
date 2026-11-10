@@ -1,4 +1,5 @@
-name: Minimal PLaMo3 legacy compile
+name: PLaMo3 tokenizer backport compile
+# Actual pre-segmentation transplant build
 # Add Windows Error Reporting crash diagnostics
 # Retry after removing blanket switch insertion (af9c6d1)
 # Retry after tokenizer duplicate-case fix (665c266)
@@ -21,8 +22,15 @@ jobs:
           repository: ggml-org/llama.cpp
           ref: 5266f24da75dc449bd56cbed7addb9c8e4a6a73e
           path: legacy
+      - uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 0d9eacadf2e19ff5d49df29800afc88a8e844123
+          path: donor
       - name: Apply guarded minimal patch
         run: python app/backport/apply_minimal_plamo3.py legacy
+      - name: Transplant PLaMo3 pre-segmentation implementation
+        run: python app/backport/apply_plamo3_tokenizer.py legacy donor
       - name: Configure
         shell: pwsh
         run: |
