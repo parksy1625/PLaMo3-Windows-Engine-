@@ -1,4 +1,5 @@
 name: Minimal PLaMo3 legacy compile
+# Add Windows Error Reporting crash diagnostics
 # Retry after removing blanket switch insertion (af9c6d1)
 # Retry after tokenizer duplicate-case fix (665c266)
 on:
@@ -67,6 +68,28 @@ jobs:
           Put the GGUF in this directory and run START_TRANSLATOR.bat.
           For isolated offline Windows PCs. No network connection required.
           '@ | Set-Content -Encoding ascii "package/README.txt"
+          @'
+          @echo off
+          setlocal EnableExtensions
+          cd /d "%~dp0"
+          if not exist "plamo-3-translate-0.8b-Q4_K_M.gguf" (
+            echo MODEL_NOT_FOUND
+            pause
+            exit /b 2
+          )
+          set "DUMPDIR=%~dp0crash_dumps"
+          if not exist "%DUMPDIR%" mkdir "%DUMPDIR%"
+          reg add "HKCU\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\llama-server.exe" /v DumpFolder /t REG_EXPAND_SZ /d "%DUMPDIR%" /f
+          reg add "HKCU\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\llama-server.exe" /v DumpType /t REG_DWORD /d 1 /f
+          llama-server.exe -m "plamo-3-translate-0.8b-Q4_K_M.gguf" --host 127.0.0.1 --port 8080 -ngl 0 -c 512 --no-mmap -lv 4 > "diagnostic_log.txt" 2>&1
+          set "EXITCODE=%ERRORLEVEL%"
+          echo EXIT_CODE=%EXITCODE%
+          echo EXIT_CODE=%EXITCODE%> "diagnostic_exit_code.txt"
+          echo Logs: diagnostic_log.txt, diagnostic_exit_code.txt
+          echo Crash dumps (if created): crash_dumps
+          echo Do not share crash dumps without company approval.
+          pause
+          '@ | Set-Content -Encoding ascii "package/DIAGNOSE_MODEL_CRASH.bat"
           Write-Host "Package directory prepared; upload-artifact will create the only archive layer."
       - name: Smoke-test binary version
         shell: pwsh
