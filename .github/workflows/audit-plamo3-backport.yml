@@ -1,0 +1,56 @@
+name: Audit PLaMo3 Legacy Backport
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout baseline llama.cpp v0.4.0
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: v0.4.0
+          path: baseline
+          fetch-depth: 1
+      - name: Checkout current llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: master
+          path: current
+          fetch-depth: 1
+      - name: Inspect PLaMo3 implementation and compare
+        shell: bash
+        run: |
+          mkdir -p audit
+          {
+            echo '# PLaMo3 source compatibility audit'
+            echo
+            echo "Baseline: $(git -C baseline rev-parse HEAD)"
+            echo "Current: $(git -C current rev-parse HEAD)"
+            echo
+            echo '## PLaMo3 symbols in baseline'
+            grep -RInE 'PLAMO3|plamo3|Plamo3' baseline/src baseline/include baseline/gguf-py 2>/dev/null | head -100 || true
+            echo
+            echo '## PLaMo3 symbols in current'
+            grep -RInE 'PLAMO3|plamo3|Plamo3' current/src current/include current/gguf-py 2>/dev/null | head -180 || true
+            echo
+            echo '## Relevant source files'
+            for f in src/llama-vocab.cpp src/llama-vocab.h src/llama-model.cpp src/llama-model-loader.cpp src/llama-arch.cpp src/llama-graph.cpp include/llama.h; do
+              echo "### $f"
+              if test -f baseline/$f && test -f current/$f; then
+                git diff --no-index --numstat baseline/$f current/$f || true
+              else
+                echo 'Missing from one revision'
+              fi
+            done
+          } > audit/PLaMo3-source-audit.md
+          cat audit/PLaMo3-source-audit.md
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLaMo3-Legacy-Source-Audit
+          path: audit/PLaMo3-source-audit.md
+          retention-days: 30
