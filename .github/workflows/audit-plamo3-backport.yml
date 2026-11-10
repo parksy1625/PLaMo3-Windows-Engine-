@@ -1,6 +1,10 @@
 name: Audit PLaMo3 Legacy Backport
 on:
   workflow_dispatch:
+  push:
+    branches: [plamo3-legacy-backport]
+    paths:
+      - '.github/workflows/audit-plamo3-backport.yml'
 permissions:
   contents: read
 jobs:
