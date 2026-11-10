@@ -117,25 +117,43 @@ jobs:
           Add-Content full/TEST_ENGINE.bat 'pause' -Encoding ascii
           $diag = @'
           @echo off
-          setlocal
+          setlocal EnableExtensions
           cd /d "%~dp0"
           if not exist logs mkdir logs
-          echo PLaMo3 Windows diagnostic > logs\diagnostic.txt
-          ver >> logs\diagnostic.txt
-          echo === Engine version (no model) === >> logs\diagnostic.txt
-          engine\llama-server.exe --version >> logs\diagnostic.txt 2>&1
-          echo Exit code: %ERRORLEVEL% >> logs\diagnostic.txt
-          echo === Engine help (no model) === >> logs\diagnostic.txt
-          engine\llama-server.exe --help >> logs\diagnostic.txt 2>&1
-          echo Exit code: %ERRORLEVEL% >> logs\diagnostic.txt
-          echo === Engine files === >> logs\diagnostic.txt
-          dir /b engine >> logs\diagnostic.txt
-          echo === Recent Windows crash events === >> logs\diagnostic.txt
-          powershell -NoProfile -Command "Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001; StartTime=(Get-Date).AddDays(-2)} -MaxEvents 10 -ErrorAction SilentlyContinue | Format-List TimeCreated,Id,ProviderName,Message" >> logs\diagnostic.txt 2>&1
-          echo Done: logs\diagnostic.txt
+          echo PLaMo3 targeted diagnostics > "logs\diagnostic.txt"
+          ver >> "logs\diagnostic.txt"
+          echo === Engine version === >> "logs\diagnostic.txt"
+          "engine\llama-server.exe" --version >> "logs\diagnostic.txt" 2>&1
+          echo Exit code: %ERRORLEVEL% >> "logs\diagnostic.txt"
+          echo === Engine files === >> "logs\diagnostic.txt"
+          dir /b engine >> "logs\diagnostic.txt"
+          echo === Relevant llama-server.exe Application Error 1000 === >> "logs\diagnostic.txt"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$events=Get-WinEvent -FilterHashtable @{LogName='Application';Id=1000;StartTime=(Get-Date).AddDays(-7)} -MaxEvents 300 -ErrorAction SilentlyContinue; $events | Where-Object {$_.Message -match 'llama-server\.exe'} | Select-Object -First 8 | Format-List TimeCreated,Id,Message" >> "logs\diagnostic.txt" 2>&1
+          echo === Relevant llama-server.exe WER 1001 === >> "logs\diagnostic.txt"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$events=Get-WinEvent -FilterHashtable @{LogName='Application';Id=1001;StartTime=(Get-Date).AddDays(-7)} -MaxEvents 300 -ErrorAction SilentlyContinue; $events | Where-Object {$_.Message -match 'llama-server\.exe'} | Select-Object -First 8 | Format-List TimeCreated,Id,Message" >> "logs\diagnostic.txt" 2>&1
+          echo Done. See logs\diagnostic.txt
           pause
           '@
           Set-Content full/DIAGNOSE.bat $diag -Encoding ascii
+          $probe = @'
+          @echo off
+          setlocal EnableExtensions
+          cd /d "%~dp0"
+          if not exist logs mkdir logs
+          set "MODEL="
+          for /f "delims=" %%F in ('dir /b /a-d "model\*.gguf" 2^>nul') do if not defined MODEL set "MODEL=%~dp0model\%%F"
+          if not defined MODEL (echo GGUF missing in model folder & pause & exit /b 1)
+          echo Phase 1: model loading with memory mapping disabled.
+          echo Please wait until process exits or server reports ready.
+          "engine\llama-server.exe" -m "%MODEL%" --host 127.0.0.1 --port 18081 -c 512 -t 2 --no-mmap --no-warmup -v > "logs\probe-no-mmap.log" 2>&1
+          set "RC=%ERRORLEVEL%"
+          echo Phase 1 exit code: %RC%
+          echo %RC% > "logs\probe-exit-code.txt"
+          type "logs\probe-no-mmap.log"
+          echo Run DIAGNOSE.bat after a crash to capture relevant Windows events.
+          pause
+          '@
+          Set-Content full/PROBE_MODEL_NO_MMAP.bat $probe -Encoding ascii
           Compress-Archive -Path full/* -DestinationPath PLaMo3-Complete.zip
           $bytes = [System.IO.File]::ReadAllBytes((Join-Path $PWD 'PLaMo3-Complete.zip'))
           $mid = [int][Math]::Ceiling($bytes.Length / 2)
