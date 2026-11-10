@@ -47,6 +47,17 @@ jobs:
           "Exit code: $code" | Set-Content compile-status.txt
           Get-Content compile-log.txt -Tail 70
           if ($code -ne 0) { throw "Compile failed (exit $code)" }
+      - name: Inspect runtime imports and preserve debug symbols
+        shell: pwsh
+        run: |
+          $exe = "build/bin/Release/llama-server.exe"
+          $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+          if ($dumpbin) {
+            & dumpbin.exe /dependents $exe | Out-File -Encoding utf8 dependency-report.txt
+          } else {
+            "dumpbin not available in current shell" | Set-Content dependency-report.txt
+          }
+          Get-ChildItem "build/bin/Release" -Filter "*.pdb" | Select-Object Name,Length | Out-File -Encoding utf8 pdb-report.txt
       - name: Package executable and runtime DLLs
         shell: pwsh
         run: |
@@ -57,6 +68,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "package" | Out-Null
           Copy-Item $exe "package/"
           Get-ChildItem $bin -Filter "*.dll" | Copy-Item -Destination "package/"
+          Get-ChildItem $bin -Filter "*.pdb" | Copy-Item -Destination "package/"
           @'
           @echo off
           setlocal
@@ -71,7 +83,7 @@ jobs:
           '@ | Set-Content -Encoding ascii "package/START_TRANSLATOR.bat"
           @'
           Experimental PLaMo3 legacy engine (llama.cpp v0.4.0).
-          Tokenizer registration compatibility build; exact PLaMo3 tokenization is NOT implemented.
+          PLaMo3 pre-segmentation code selectively transplanted from newer llama.cpp.
           Model loading, inference, and translation correctness are NOT verified.
           Put the GGUF in this directory and run START_TRANSLATOR.bat.
           For isolated offline Windows PCs. No network connection required.
@@ -89,16 +101,27 @@ jobs:
           if not exist "%DUMPDIR%" mkdir "%DUMPDIR%"
           reg add "HKCU\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\llama-server.exe" /v DumpFolder /t REG_EXPAND_SZ /d "%DUMPDIR%" /f
           reg add "HKCU\Software\Microsoft\Windows\Windows Error Reporting\LocalDumps\llama-server.exe" /v DumpType /t REG_DWORD /d 1 /f
-          llama-server.exe -m "plamo-3-translate-0.8b-Q4_K_M.gguf" --host 127.0.0.1 --port 8080 -ngl 0 -c 512 --no-mmap -lv 4 > "diagnostic_log.txt" 2>&1
+          echo DIAG_START=%DATE% %TIME%> "diagnostic_environment.txt"
+          ver >> "diagnostic_environment.txt"
+          echo MODEL_SIZE: >> "diagnostic_environment.txt"
+          dir "plamo-3-translate-0.8b-Q4_K_M.gguf" >> "diagnostic_environment.txt"
+          llama-server.exe --version >> "diagnostic_environment.txt" 2>&1
+          llama-server.exe -m "plamo-3-translate-0.8b-Q4_K_M.gguf" --host 127.0.0.1 --port 8080 -ngl 0 -c 512 --no-mmap > "diagnostic_log.txt" 2>&1
           set "EXITCODE=%ERRORLEVEL%"
           echo EXIT_CODE=%EXITCODE%
           echo EXIT_CODE=%EXITCODE%> "diagnostic_exit_code.txt"
-          echo Logs: diagnostic_log.txt, diagnostic_exit_code.txt
+          echo Logs: diagnostic_log.txt, diagnostic_exit_code.txt, diagnostic_environment.txt
+          echo Event Viewer: Windows Logs / Application, look for llama-server.exe and faulting module.
           echo Crash dumps (if created): crash_dumps
           echo Do not share crash dumps without company approval.
           pause
           '@ | Set-Content -Encoding ascii "package/DIAGNOSE_MODEL_CRASH.bat"
           Write-Host "Package directory prepared; upload-artifact will create the only archive layer."
+      - name: Verify model loader diagnostics included
+        shell: pwsh
+        run: |
+          if (!(Test-Path "package/DIAGNOSE_MODEL_CRASH.bat")) { throw "diagnostic script missing" }
+          if (!(Test-Path "dependency-report.txt")) { throw "dependency report missing" }
       - name: Smoke-test binary version
         shell: pwsh
         run: |
@@ -118,4 +141,6 @@ jobs:
           path: |
             compile-log.txt
             compile-status.txt
+            dependency-report.txt
+            pdb-report.txt
           if-no-files-found: warn
