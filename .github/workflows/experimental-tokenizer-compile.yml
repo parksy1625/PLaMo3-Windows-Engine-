@@ -1,0 +1,64 @@
+name: Experimental PLaMo3 tokenizer transplant compile
+on:
+  push:
+    branches: [plamo3-legacy-backport]
+    paths: ['.github/workflows/experimental-tokenizer-compile.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout legacy source
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 5266f24da75dc449bd56cbed7addb9c8e4a6a73e
+          path: legacy
+      - name: Checkout tokenizer donor
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 0d9eacadf2e19ff5d49df29800afc88a8e844123
+          path: donor
+      - name: Transplant tokenizer sources for API compatibility probe
+        shell: pwsh
+        run: |
+          Copy-Item donor/src/llama-vocab.cpp legacy/src/llama-vocab.cpp -Force
+          Copy-Item donor/src/llama-vocab.h legacy/src/llama-vocab.h -Force
+          # Preserve legacy public header, append only the PLaMo3 enum if missing.
+          $header = 'legacy/include/llama.h'
+          $h = Get-Content $header -Raw
+          if ($h -notmatch 'LLAMA_VOCAB_TYPE_PLAMO3') {
+            $needle = '(?m)^(\s*LLAMA_VOCAB_TYPE_PLAMO2\s*=\s*\d+[^\r\n]*,?)'
+            if ($h -notmatch $needle) { throw 'Could not locate PLAMO2 enum; manual backport required' }
+            $h = [regex]::Replace($h,$needle, {param($m) $m.Value + "`r`n        LLAMA_VOCAB_TYPE_PLAMO3 = 8, // PLaMo3 tokenizer" },1)
+            Set-Content $header $h -NoNewline
+          }
+      - name: Configure legacy build
+        shell: pwsh
+        run: |
+          cmake -S legacy -B build -G "Visual Studio 17 2022" -A x64 `
+            -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_CURL=OFF `
+            -DGGML_NATIVE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF `
+            -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_AVX512=OFF `
+            -DGGML_OPENMP=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+      - name: Compile and record API incompatibilities
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target llama-server --parallel 4 *> compile-log.txt
+          $code = $LASTEXITCODE
+          Write-Host "Compile exit code: $code"
+          Get-Content compile-log.txt -Tail 100
+          "Exit code: $code" | Set-Content compile-status.txt
+          if ($code -ne 0) { Write-Host 'Experimental transplant did not compile; inspect uploaded log for required adaptations.' }
+      - name: Upload compiler report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLaMo3-Experimental-Tokenizer-Compile
+          path: |
+            compile-log.txt
+            compile-status.txt
+          if-no-files-found: warn
