@@ -1,4 +1,5 @@
 name: Minimal PLaMo3 legacy compile
+# Retry after tokenizer duplicate-case fix (665c266)
 on:
   push:
     branches: [plamo3-legacy-backport]
