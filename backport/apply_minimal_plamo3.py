@@ -24,8 +24,7 @@ def vocab(s):
  s=once(s,'case LLAMA_VOCAB_TYPE_PLAMO2: return "PLaMo2";','case LLAMA_VOCAB_TYPE_PLAMO2: return "PLaMo2";\n        case LLAMA_VOCAB_TYPE_PLAMO3: return "PLaMo3";')
  # PLaMo3 uses existing PLaMo2 tokenizer as a compatibility probe, NOT yet exact PLaMo3 segmentation.
  s=once(s,'case LLAMA_VOCAB_TYPE_PLAMO2:\n            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab);','case LLAMA_VOCAB_TYPE_PLAMO2:\n        case LLAMA_VOCAB_TYPE_PLAMO3:\n            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab);')
- # switch handling: replicate each PLaMo2 case label except the above combined labels
- s=re.sub(r'(?m)^(\s*)case LLAMA_VOCAB_TYPE_PLAMO2:(?!\n\s*case LLAMA_VOCAB_TYPE_PLAMO3:)',r'\1case LLAMA_VOCAB_TYPE_PLAMO2:\n\1case LLAMA_VOCAB_TYPE_PLAMO3:',s)
+ # Avoid blanket switch-case insertion: it caused duplicate case labels.
  return s
 edit('src/llama-vocab.cpp',vocab)
 print('Minimal tokenizer recognition patch applied. Exact PLaMo3 segmentation not implemented.')
