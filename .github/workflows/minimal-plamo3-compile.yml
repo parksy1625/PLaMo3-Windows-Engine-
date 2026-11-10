@@ -1,0 +1,47 @@
+name: Minimal PLaMo3 legacy compile
+on:
+  push:
+    branches: [plamo3-legacy-backport]
+    paths: ['.github/workflows/minimal-plamo3-compile.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+      - uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 5266f24da75dc449bd56cbed7addb9c8e4a6a73e
+          path: legacy
+      - name: Apply guarded minimal patch
+        run: python app/backport/apply_minimal_plamo3.py legacy
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S legacy -B build -G "Visual Studio 17 2022" -A x64 `
+            -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_TESTS=OFF -DLLAMA_CURL=OFF `
+            -DGGML_NATIVE=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF `
+            -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_AVX512=OFF `
+            -DGGML_OPENMP=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+      - name: Compile legacy with minimal tokenizer registration
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target llama-server --parallel 4 *> compile-log.txt
+          $code = $LASTEXITCODE
+          "Exit code: $code" | Set-Content compile-status.txt
+          Get-Content compile-log.txt -Tail 70
+          if ($code -ne 0) { Write-Host "Compile failed; inspect artifact" }
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLaMo3-Minimal-Backport-Compile-Report
+          path: |
+            compile-log.txt
+            compile-status.txt
+          if-no-files-found: warn
