@@ -1,0 +1,55 @@
+name: Prepare PLaMo3 tokenizer backport
+on:
+  push:
+    branches: [plamo3-legacy-backport]
+    paths: ['.github/workflows/prepare-plamo3-backport.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 5266f24da75dc449bd56cbed7addb9c8e4a6a73e
+          path: baseline
+      - uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: 0d9eacadf2e19ff5d49df29800afc88a8e844123
+          path: upstream
+      - name: Extract tokenizer-only source changes and inspect dependencies
+        shell: bash
+        run: |
+          mkdir -p output
+          for f in src/llama-vocab.cpp src/llama-vocab.h include/llama.h; do
+            git diff --no-index -- baseline/"$f" upstream/"$f" > "output/$(basename "$f").diff" || test $? -eq 1
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          out=['# PLaMo3 tokenizer backport extraction','', 'Baseline: 5266f24da75dc449bd56cbed7addb9c8e4a6a73e','Upstream: 0d9eacadf2e19ff5d49df29800afc88a8e844123','']
+          for name in ('src/llama-vocab.cpp','src/llama-vocab.h','include/llama.h'):
+              base=Path('baseline')/name
+              latest=Path('upstream')/name
+              a=base.read_text(errors='replace').splitlines()
+              b=latest.read_text(errors='replace').splitlines()
+              out.extend(['## '+name, f'Baseline lines: {len(a)}; upstream lines: {len(b)}',''])
+              hits=[i for i,s in enumerate(b) if re.search('plamo3|PLAMO3',s,re.I)]
+              if not hits:
+                  out.append('No direct PLaMo3 token references in this file.')
+              for i in hits:
+                  out.extend(['',f'### Upstream line {i+1}', '```cpp'])
+                  out.extend(f'{j+1}: {b[j]}' for j in range(max(0,i-12),min(len(b),i+22)))
+                  out.append('```')
+              out.append('')
+          Path('output/BACKPORT_REVIEW.md').write_text('\n'.join(out))
+          PY
+          ls -lh output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PLaMo3-Tokenizer-Backport-Source-Diffs
+          path: output/
+          retention-days: 30
