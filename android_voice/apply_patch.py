@@ -39,6 +39,21 @@ for f in source.rglob("*"):
         target=base/"src"/f.relative_to(source)
         target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(f,target)
+# Android 11+ package visibility: required to discover system TTS engines.
+# Without this declaration TextToSpeech.initialize can report engine unavailable.
+manifest=base/"android/app/src/main/AndroidManifest.xml"
+xml=manifest.read_text()
+tts_query='android.intent.action.TTS_SERVICE'
+if tts_query not in xml:
+    anchor='    </queries>'
+    if xml.count(anchor)!=1:
+        raise SystemExit("AndroidManifest <queries> anchor not found")
+    xml=xml.replace(anchor,
+      '        <intent>\n'
+      '            <action android:name="android.intent.action.TTS_SERVICE" />\n'
+      '        </intent>\n'
+      +anchor,1)
+    manifest.write_text(xml)
 p=base/"app.json"
 if p.exists():
     obj=json.loads(p.read_text())
