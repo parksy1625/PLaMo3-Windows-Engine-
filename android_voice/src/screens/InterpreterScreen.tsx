@@ -9,7 +9,7 @@ import {ROUTES} from '../utils/navigationConstants';
 
 type Phase = 'idle' | 'translation' | 'speaking';
 const colors = {background:'#F6F7FB',white:'#FFFFFF',text:'#182232',muted:'#64748B',ko:'#2861D7',ja:'#15816A',border:'#E5E9F0'};
-export const InterpreterScreen: React.FC<{navigation:any}> = observer(({navigation}) => {
+export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigation}) => {
   const [direction,setDirection] = useState<InterpreterLanguage>('ko');
   const directionRef = useRef<InterpreterLanguage>('ko');
   const [phase,setPhase] = useState<Phase>('idle');
