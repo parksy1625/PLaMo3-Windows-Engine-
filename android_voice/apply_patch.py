@@ -66,4 +66,25 @@ p.write_text(s)
 p=base/"android/app/build.gradle"
 s=p.read_text().replace('applicationId "com.pocketpalai"','applicationId "com.plamovoice.redmi"').replace('abiFilters "arm64-v8a", "x86_64"','abiFilters "arm64-v8a"')
 p.write_text(s)
+# Bridge sherpa-onnx AAR to the PocketPal React Native application.
+native=Path(__file__).resolve().parent/"native/SenseVoiceModule.kt"
+module=base/"android/app/src/main/java/com/pocketpalai/SenseVoiceModule.kt"
+module.parent.mkdir(parents=True,exist_ok=True)
+shutil.copy2(native,module)
+
+application=base/"android/app/src/main/java/com/pocketpalai/MainApplication.kt"
+appsrc=application.read_text()
+anchor="              add(NavigationBarPackage())"
+if appsrc.count(anchor)!=1:
+    raise SystemExit("MainApplication package anchor changed")
+appsrc=appsrc.replace(anchor,anchor+"\n              add(SenseVoicePackage())",1)
+application.write_text(appsrc)
+
+gradle=base/"android/app/build.gradle"
+build=gradle.read_text()
+if 'implementation(files("libs/sherpa-onnx-2.0.1.aar"))' not in build:
+    build += '\n// Pinned sherpa-onnx v2.0.1 Android release AAR, downloaded by CI.\n'
+    build += 'dependencies { implementation(files("libs/sherpa-onnx-2.0.1.aar")) }\n'
+gradle.write_text(build)
+
 print("PocketPal interpreter overlay applied")
