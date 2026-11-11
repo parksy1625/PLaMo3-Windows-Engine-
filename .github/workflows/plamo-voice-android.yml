@@ -1,0 +1,121 @@
+name: PLaMo Voice Redmi Android APK
+
+on:
+  push:
+    branches:
+      - plamo-voice-redmi-android-build
+    paths:
+      - 'android_voice/**'
+      - '.github/workflows/plamo-voice-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ORG_GRADLE_PROJECT_rnllamaBuildFromSource: 'false'
+      ORG_GRADLE_PROJECT_reactNativeArchitectures: 'arm64-v8a'
+      CI: 'true'
+    steps:
+      - name: Checkout interpreter overlay
+        uses: actions/checkout@v4
+
+      - name: Clone pinned PocketPal v1.23
+        run: |
+          git clone --depth 1 https://github.com/a-ghorbani/pocketpal-ai.git pocketpal
+          cd pocketpal
+          git fetch --depth=1 origin b0f3c83082eeb4b372372f4168ffdeca515b649c
+          git checkout --detach b0f3c83082eeb4b372372f4168ffdeca515b649c
+
+      - name: Apply interpreter overlay
+        run: python3 android_voice/apply_patch.py pocketpal
+
+      - name: Reclaim build disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc || true
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.21.0
+          cache: yarn
+          cache-dependency-path: pocketpal/yarn.lock
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Install Yarn
+        run: npm install -g yarn@1.22.22
+
+      - name: Install npm packages
+        working-directory: pocketpal
+        run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - name: Write CI placeholder config
+        working-directory: pocketpal
+        run: |
+          cat > .env <<'EOT'
+          FIREBASE_FUNCTIONS_URL=https://dummy.invalid
+          SUPABASE_URL=https://dummy.supabase.co
+          SUPABASE_ANON_KEY=dummy
+          PALSHUB_API_BASE_URL=https://dummy.invalid
+          APP_URL=pocketpal://app
+          ENABLE_PALSHUB_INTEGRATION=false
+          ENABLE_AUTHENTICATION=false
+          ENABLE_OFFLINE_MODE=true
+          GOOGLE_IOS_CLIENT_ID=dummy.apps.googleusercontent.com
+          GOOGLE_WEB_CLIENT_ID=dummy.apps.googleusercontent.com
+          EOT
+          cat > android/app/google-services.json <<'EOT'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "dummy-project-for-ci",
+              "storage_bucket": "dummy-project-for-ci.appspot.com"
+            },
+            "client": [{
+              "client_info": {
+                "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                "android_client_info": {"package_name": "com.plamovoice.redmi"}
+              },
+              "api_key": [{"current_key": "dummy-ci-key"}]
+            }]
+          }
+          EOT
+
+      - name: Check TypeScript
+        working-directory: pocketpal
+        run: yarn typecheck
+
+      - name: Build arm64 Android release APK
+        working-directory: pocketpal/android
+        run: ./gradlew assembleProdRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace 2>&1 | tee ../../android-build.log
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp pocketpal/android/app/build/outputs/apk/prod/release/app-prod-release.apk dist/PLaMoVoice-Redmi-v0.1.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLaMoVoice-Redmi-v0.1-APK
+          path: dist/PLaMoVoice-Redmi-v0.1.apk
+          if-no-files-found: error
+
+      - name: Upload build log if failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLaMoVoice-Android-build-log
+          path: android-build.log
+          if-no-files-found: ignore
