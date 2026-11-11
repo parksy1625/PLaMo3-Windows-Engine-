@@ -4,7 +4,7 @@ import {observer} from 'mobx-react';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useVoiceCapture} from '../hooks/useVoiceCapture';
 import {asrStore, modelStore} from '../store';
-import {getEngine} from '../services/tts';
+import {getEngine, SupertonicEngine} from '../services/tts';
 import {buildPFML3, cleanTranslation, oppositeLanguage, type InterpreterLanguage} from '../services/interpreter/pfml3';
 import {ROUTES} from '../utils/navigationConstants';
 
@@ -21,6 +21,11 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
   const [draft,setDraft] = useState('');
   const [textMode,setTextMode] = useState(false);
   const [duration,setDuration] = useState<number|null>(null);
+  const [ttsReady,setTtsReady] = useState(false);
+  const [ttsInstalling,setTtsInstalling] = useState(false);
+  const [ttsProgress,setTtsProgress] = useState(0);
+  const [ttsVoice,setTtsVoice] = useState<'F1'|'M1'>('F1');
+  const ttsEngine = getEngine('supertonic') as SupertonicEngine;
   const mounted = useRef(true);
   const working = useRef(false);
 
@@ -28,18 +33,41 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
     mounted.current = true;
     asrStore.setUserASROverride(true);
     asrStore.init().catch(console.warn);
+    (getEngine('supertonic') as SupertonicEngine).isInstalled()
+      .then(ready => {if(mounted.current)setTtsReady(ready);})
+      .catch(console.warn);
     return () => {mounted.current=false;};
   }, []);
 
   const speak = useCallback(async (text:string, lang:InterpreterLanguage) => {
-    const engine = getEngine('system');
+    const engine = getEngine('supertonic') as SupertonicEngine;
+    if (!(await engine.isInstalled())) {
+      throw new Error('AI 음성 모델 Supertonic 3를 설치해 주세요.');
+    }
     const voices = await engine.getVoices();
-    const voice = voices.find(v => (v.language || '').toLowerCase().startsWith(lang));
-    if (!voice) throw new Error(lang === 'ja'
-      ? '일본어 TTS 음성을 Android 설정에서 설치해 주세요.'
-      : '한국어 TTS 음성을 Android 설정에서 설치해 주세요.');
-    await engine.play(text,voice);
-  }, []);
+    const voice = voices.find(v => v.id === ttsVoice);
+    if (!voice) throw new Error('Supertonic 음성 스타일을 찾지 못했습니다.');
+    await engine.play(text,voice,{language:lang,inferenceSteps:3});
+  }, [ttsVoice]);
+
+  const installTTS = useCallback(async () => {
+    if (ttsInstalling || phase !== 'idle' || asrStore.captureState !== 'idle') return;
+    setTtsInstalling(true);
+    setTtsProgress(0);
+    setError('');
+    try {
+      await (getEngine('supertonic') as SupertonicEngine).downloadModel(progress => {
+        if (mounted.current) setTtsProgress(progress);
+      });
+      const installed = await (getEngine('supertonic') as SupertonicEngine).isInstalled();
+      if (!installed) throw new Error('다운로드 후 모델 검증에 실패했습니다.');
+      if (mounted.current) setTtsReady(true);
+    } catch (e) {
+      if (mounted.current) setError('Supertonic 3 설치 실패: '+String(e));
+    } finally {
+      if (mounted.current) setTtsInstalling(false);
+    }
+  }, [ttsInstalling, phase]);
 
   const translate = useCallback(async (text:string, source:InterpreterLanguage) => {
     if (working.current || !text.trim()) return;
@@ -64,21 +92,20 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
       if (!mounted.current) return;
       setDuration(Date.now()-started);
       setTranslated(output);
-      setPhase('speaking');
-      try {await speak(output,oppositeLanguage(source));}
-      catch(e) {if(mounted.current) {
-        const message=e instanceof Error ? e.message : String(e);
-        setError(/Failed to initialize TTS engine/i.test(message)
-          ? '휴대폰의 TTS 음성 엔진을 찾지 못했습니다. Android 설정에서 텍스트 음성 변환 엔진과 한국어·일본어 음성 데이터를 확인하세요. ('+message+')'
-          : message);
-      }}
+      if (ttsReady) {
+        setPhase('speaking');
+        try {await speak(output,oppositeLanguage(source));}
+        catch(e) {if(mounted.current)setError(e instanceof Error ? e.message : String(e));}
+      } else if (mounted.current) {
+        setError('번역은 완료됐습니다. 음성 출력을 사용하려면 위에서 Supertonic 3 모델을 설치하세요.');
+      }
     } catch(e) {
       if(mounted.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
       working.current=false;
       if(mounted.current)setPhase('idle');
     }
-  },[speak]);
+  },[speak,ttsReady]);
 
   const onTranscript=useCallback((text:string) => {
     translate(text,directionRef.current).catch(console.warn);
@@ -100,7 +127,7 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
     directionRef.current=lang;setDirection(lang);
     setError('');setOriginal('');setTranslated('');
     asrStore.setSpokenLanguage(lang);
-    getEngine('system').stop().catch(()=>{});
+    (getEngine('supertonic') as SupertonicEngine).stop().catch(()=>{});
     capture.start();
   };
   const replay=()=>{
@@ -123,11 +150,27 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
       <Text style={styles.panelTitle}>엔진 상태</Text>
       <Text style={styles.muted}>PLaMo 0.8B: {modelReady?'준비됨':'모델을 불러오세요'}</Text>
       <Text style={styles.muted}>Whisper: {asrReady?'준비됨':'설치 필요'}</Text>
+      <Text style={styles.muted}>Supertonic 3 AI 음성: {ttsReady?'준비됨':ttsInstalling?'설치 중':'설치 필요'}</Text>
+      {!ttsReady && <Pressable disabled={ttsInstalling || busy || recording} style={[styles.install,(ttsInstalling||busy||recording)&&styles.disabled]}
+        onPress={installTTS}>
+        <Text style={styles.installText}>{ttsInstalling
+          ? 'AI 음성 다운로드 '+Math.round(ttsProgress*100)+'%'
+          : 'Supertonic 3 AI 음성 설치 · 약 400MB'}</Text>
+      </Pressable>}
+      {ttsReady && <View style={styles.voiceOptions}>
+        <Text style={styles.hint}>AI 음성 선택 (한국어·일본어 공통)</Text>
+        <Pressable onPress={()=>setTtsVoice('F1')} style={[styles.voicePill,ttsVoice==='F1'&&styles.voicePillActive]}>
+          <Text style={styles.voicePillText}>여성 F1</Text>
+        </Pressable>
+        <Pressable onPress={()=>setTtsVoice('M1')} style={[styles.voicePill,ttsVoice==='M1'&&styles.voicePillActive]}>
+          <Text style={styles.voicePillText}>남성 M1</Text>
+        </Pressable>
+      </View>}
       {!asrReady&&<Pressable disabled={downloading} style={[styles.install,downloading&&styles.disabled]}
         onPress={()=>asrStore.downloadModel('base').catch(e=>setError(String(e)))}>
         <Text style={styles.installText}>{downloading?('다운로드 중 '+Math.round(asrStore.downloadProgress.base*100)+'%'):'Whisper Base 설치 · 약 82MB'}</Text>
       </Pressable>}
-      <Text style={styles.hint}>최초 다운로드 후 기기에서 음성 인식·번역을 실행합니다.</Text>
+      <Text style={styles.hint}>모델은 Wi-Fi로 설치 권장 · 설치 후 음성 인식·번역·출력 모두 오프라인</Text>
     </View>
     <View style={styles.status}>{(busy||recording)&&<ActivityIndicator color={colors.ko}/>}<Text style={styles.muted}>{status}</Text></View>
     <View style={styles.buttons}>
@@ -195,4 +238,8 @@ const styles=StyleSheet.create({
   textToggle:{padding:16,alignItems:'center'},
   input:{fontSize:16,backgroundColor:colors.white,color:colors.text,minHeight:90,textAlignVertical:'top'},
   footer:{textAlign:'center',fontSize:11,marginTop:12,color:colors.muted},
+  voiceOptions:{flexDirection:'row',alignItems:'center',flexWrap:'wrap',gap:8,marginTop:10},
+  voicePill:{borderWidth:1,borderColor:colors.border,borderRadius:8,padding:9},
+  voicePillActive:{borderColor:colors.ko,backgroundColor:'#E8F0FE'},
+  voicePillText:{fontSize:12,color:colors.text,fontWeight:'700'},
 });
