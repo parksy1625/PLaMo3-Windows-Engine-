@@ -1,9 +1,9 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View} from 'react-native';
+import {ActivityIndicator, DeviceEventEmitter, PermissionsAndroid, Pressable, ScrollView, StyleSheet, Text, TextInput, View} from 'react-native';
 import {observer} from 'mobx-react';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {useVoiceCapture} from '../hooks/useVoiceCapture';
-import {asrStore, modelStore} from '../store';
+import {modelStore} from '../store';
+import {downloadSenseVoice, senseVoiceInstalled, senseVoicePaths, nativeSenseVoice, type SenseVoiceEvent} from '../services/interpreter/sensevoice';
 import {getEngine, SupertonicEngine} from '../services/tts';
 import {buildPFML3, cleanTranslation, oppositeLanguage, type InterpreterLanguage} from '../services/interpreter/pfml3';
 import {ROUTES} from '../utils/navigationConstants';
@@ -21,18 +21,21 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
   const [draft,setDraft] = useState('');
   const [textMode,setTextMode] = useState(false);
   const [duration,setDuration] = useState<number|null>(null);
+  const [decodeMs,setDecodeMs] = useState<number|null>(null);
+  const [asrReady,setAsrReady] = useState(false);
+  const [asrInstalling,setAsrInstalling] = useState(false);
+  const [asrProgress,setAsrProgress] = useState(0);
+  const [captureState,setCaptureState] = useState<'idle'|'starting'|'recording'|'decoding'>('idle');
   const [ttsReady,setTtsReady] = useState(false);
   const [ttsInstalling,setTtsInstalling] = useState(false);
   const [ttsProgress,setTtsProgress] = useState(0);
   const [ttsVoice,setTtsVoice] = useState<'F1'|'M1'>('F1');
-  const ttsEngine = getEngine('supertonic') as SupertonicEngine;
   const mounted = useRef(true);
   const working = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
-    asrStore.setUserASROverride(true);
-    asrStore.init().catch(console.warn);
+    senseVoiceInstalled().then(ready=>{if(mounted.current)setAsrReady(ready);}).catch(console.warn);
     (getEngine('supertonic') as SupertonicEngine).isInstalled()
       .then(ready => {if(mounted.current)setTtsReady(ready);})
       .catch(console.warn);
@@ -51,7 +54,7 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
   }, [ttsVoice]);
 
   const installTTS = useCallback(async () => {
-    if (ttsInstalling || phase !== 'idle' || asrStore.captureState !== 'idle') return;
+    if (ttsInstalling || phase !== 'idle' || captureState !== 'idle') return;
     setTtsInstalling(true);
     setTtsProgress(0);
     setError('');
@@ -67,7 +70,7 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
     } finally {
       if (mounted.current) setTtsInstalling(false);
     }
-  }, [ttsInstalling, phase]);
+  }, [ttsInstalling, phase, captureState]);
 
   const translate = useCallback(async (text:string, source:InterpreterLanguage) => {
     if (working.current || !text.trim()) return;
@@ -107,28 +110,55 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
     }
   },[speak,ttsReady]);
 
-  const onTranscript=useCallback((text:string) => {
-    translate(text,directionRef.current).catch(console.warn);
+  useEffect(() => {
+    const sub=DeviceEventEmitter.addListener('SenseVoiceResult',(event:SenseVoiceEvent)=>{
+      if(!mounted.current)return;
+      setCaptureState('idle');
+      setDecodeMs(event.decodeMs);
+      if(event.error){setError(event.error);return;}
+      if(event.text?.trim())translate(event.text,directionRef.current).catch(console.warn);
+    });
+    return ()=>sub.remove();
   },[translate]);
-  const capture=useVoiceCapture({onTranscript});
-  const captureState=asrStore.captureState;
-  const recording=captureState==='recording'||captureState==='requesting_perm';
-  const transcribing=captureState==='transcribing';
+
+  const recording=captureState==='recording';
+  const transcribing=captureState==='starting'||captureState==='decoding';
   const busy=phase!=='idle'||transcribing;
   const modelReady=!!modelStore.context && /plamo/i.test(modelStore.activeModel?.name??'');
-  const asrReady=asrStore.isSelectedTierReady;
-  const downloading=asrStore.downloadStates.base==='downloading';
-  const status=transcribing?'음성 인식 중...':phase==='translation'?'번역 중...':
-    phase==='speaking'?'음성 재생 중...':recording?'녹음 중 · 다시 누르면 완료':'언어를 선택하고 말해 주세요';
+  const status=captureState==='starting'?'SenseVoice 모델 준비 중...':
+    captureState==='decoding'?'AI 음성 인식 중...':
+    phase==='translation'?'PLaMo 번역 중...':
+    phase==='speaking'?'AI 음성 재생 중...':
+    recording?'음성을 듣고 있습니다 · 다시 누르면 종료':'언어를 선택하고 말해 주세요';
 
-  const pressMic=(lang:InterpreterLanguage)=>{
-    if(recording){if(directionRef.current===lang)capture.stop();return;}
-    if(busy||!modelReady||!asrReady)return;
+  const installASR=async()=>{
+    if(asrInstalling||captureState!=='idle'||phase!=='idle')return;
+    setAsrInstalling(true);setAsrProgress(0);setError('');
+    try{
+      await downloadSenseVoice(p=>{if(mounted.current)setAsrProgress(p);});
+      if(mounted.current)setAsrReady(true);
+    }catch(e){if(mounted.current)setError('SenseVoice 설치 실패: '+String(e));}
+    finally{if(mounted.current)setAsrInstalling(false);}
+  };
+
+  const pressMic=async(lang:InterpreterLanguage)=>{
+    if(recording){
+      setCaptureState('decoding');
+      try{await nativeSenseVoice.stop();}catch(e){setError(String(e));setCaptureState('idle');}
+      return;
+    }
+    if(busy||!modelReady||!asrReady||asrInstalling||captureState!=='idle')return;
     directionRef.current=lang;setDirection(lang);
-    setError('');setOriginal('');setTranslated('');
-    asrStore.setSpokenLanguage(lang);
-    (getEngine('supertonic') as SupertonicEngine).stop().catch(()=>{});
-    capture.start();
+    setError('');setOriginal('');setTranslated('');setDecodeMs(null);
+    setCaptureState('starting');
+    try{
+      const granted=await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+      if(granted!==PermissionsAndroid.RESULTS.GRANTED)throw new Error('마이크 권한이 필요합니다.');
+      (getEngine('supertonic') as SupertonicEngine).stop().catch(()=>{});
+      const paths=senseVoicePaths();
+      await nativeSenseVoice.start(lang,paths.model,paths.tokens);
+      if(mounted.current)setCaptureState('recording');
+    }catch(e){if(mounted.current){setError('SenseVoice 녹음 시작 실패: '+String(e));setCaptureState('idle');}}
   };
   const replay=()=>{
     if(!translated||phase!=='idle')return;
@@ -149,7 +179,7 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
     <View style={styles.panel}>
       <Text style={styles.panelTitle}>엔진 상태</Text>
       <Text style={styles.muted}>PLaMo 0.8B: {modelReady?'준비됨':'모델을 불러오세요'}</Text>
-      <Text style={styles.muted}>Whisper: {asrReady?'준비됨':'설치 필요'}</Text>
+      <Text style={styles.muted}>SenseVoice Small INT8: {asrReady?'준비됨':asrInstalling?'설치 중':'설치 필요'}</Text>
       <Text style={styles.muted}>Supertonic 3 AI 음성: {ttsReady?'준비됨':ttsInstalling?'설치 중':'설치 필요'}</Text>
       {!ttsReady && <Pressable disabled={ttsInstalling || busy || recording} style={[styles.install,(ttsInstalling||busy||recording)&&styles.disabled]}
         onPress={installTTS}>
@@ -166,9 +196,11 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
           <Text style={styles.voicePillText}>남성 M1</Text>
         </Pressable>
       </View>}
-      {!asrReady&&<Pressable disabled={downloading} style={[styles.install,downloading&&styles.disabled]}
-        onPress={()=>asrStore.downloadModel('base').catch(e=>setError(String(e)))}>
-        <Text style={styles.installText}>{downloading?('다운로드 중 '+Math.round(asrStore.downloadProgress.base*100)+'%'):'Whisper Base 설치 · 약 82MB'}</Text>
+      {!asrReady && <Pressable disabled={asrInstalling||busy||recording} style={[styles.install,(asrInstalling||busy||recording)&&styles.disabled]}
+        onPress={installASR}>
+        <Text style={styles.installText}>{asrInstalling
+          ? 'SenseVoice 다운로드 '+Math.round(asrProgress*100)+'%'
+          : 'SenseVoice Small INT8 설치 · 약 239MB'}</Text>
       </Pressable>}
       <Text style={styles.hint}>모델은 Wi-Fi로 설치 권장 · 설치 후 음성 인식·번역·출력 모두 오프라인</Text>
     </View>
@@ -192,11 +224,11 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
       <View style={styles.divider}/>
       <Text style={styles.caption}>번역 결과</Text>
       <Text selectable style={styles.translated}>{translated||'번역문이 여기에 표시됩니다.'}</Text>
-      {duration!==null&&<Text style={styles.hint}>번역 { (duration/1000).toFixed(2)}초 · STT/TTS 제외</Text>}
+      {decodeMs!==null&&<Text style={styles.hint}>음성 인식 { (decodeMs/1000).toFixed(2)}초</Text>}
+      {duration!==null&&<Text style={styles.hint}>번역 { (duration/1000).toFixed(2)}초 · 음성 출력 제외</Text>}
       {!!translated&&<Pressable style={styles.replay} onPress={replay}><Text style={styles.replayText}>▶ 다시 듣기</Text></Pressable>}
     </View>
     {!!error&&<Text style={styles.error}>{error}</Text>}
-    {captureState==='error'&&<Text style={styles.error}>음성 인식 오류: {String(asrStore.lastError)}</Text>}
     <Pressable style={styles.textToggle} onPress={()=>setTextMode(v=>!v)}><Text style={styles.muted}>{textMode?'텍스트 테스트 닫기':'텍스트 번역 테스트'}</Text></Pressable>
     {textMode&&<View style={styles.panel}>
       <TextInput multiline style={styles.input} value={draft} onChangeText={setDraft} placeholder="번역할 문장을 입력하세요"/>
