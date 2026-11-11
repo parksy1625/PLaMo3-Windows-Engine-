@@ -96,6 +96,16 @@ jobs:
         working-directory: pocketpal
         run: yarn typecheck
 
+      - name: Download pinned sherpa-onnx Android AAR
+        working-directory: pocketpal
+        run: |
+          set -euo pipefail
+          mkdir -p android/app/libs
+          curl --fail --location --retry 4 --retry-all-errors \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-2.0.1.aar" \
+            --output android/app/libs/sherpa-onnx-2.0.1.aar
+          echo "a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7  android/app/libs/sherpa-onnx-2.0.1.aar" | sha256sum --check
+
       - name: Build arm64 Android release APK
         working-directory: pocketpal/android
         run: ./gradlew assembleProdRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace 2>&1 | tee ../../android-build.log
@@ -103,13 +113,13 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p dist
-          cp pocketpal/android/app/build/outputs/apk/prod/release/app-prod-release.apk dist/PLaMoVoice-Redmi-v0.1.apk
+          cp pocketpal/android/app/build/outputs/apk/prod/release/app-prod-release.apk dist/PLaMoVoice-Redmi-SenseVoice-v0.3.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PLaMoVoice-Redmi-v0.1-APK
-          path: dist/PLaMoVoice-Redmi-v0.1.apk
+          name: PLaMoVoice-Redmi-SenseVoice-v0.3-APK
+          path: dist/PLaMoVoice-Redmi-SenseVoice-v0.3.apk
           if-no-files-found: error
 
       - name: Upload build log if failed
