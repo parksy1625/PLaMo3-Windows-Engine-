@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View} from 'react-native';
 import {observer} from 'mobx-react';
+import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useVoiceCapture} from '../hooks/useVoiceCapture';
 import {asrStore, modelStore} from '../store';
 import {getEngine} from '../services/tts';
@@ -10,6 +11,7 @@ import {ROUTES} from '../utils/navigationConstants';
 type Phase = 'idle' | 'translation' | 'speaking';
 const colors = {background:'#F6F7FB',white:'#FFFFFF',text:'#182232',muted:'#64748B',ko:'#2861D7',ja:'#15816A',border:'#E5E9F0'};
 export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigation}) => {
+  const insets = useSafeAreaInsets();
   const [direction,setDirection] = useState<InterpreterLanguage>('ko');
   const directionRef = useRef<InterpreterLanguage>('ko');
   const [phase,setPhase] = useState<Phase>('idle');
@@ -64,7 +66,12 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
       setTranslated(output);
       setPhase('speaking');
       try {await speak(output,oppositeLanguage(source));}
-      catch(e) {if(mounted.current) setError(e instanceof Error ? e.message : String(e));}
+      catch(e) {if(mounted.current) {
+        const message=e instanceof Error ? e.message : String(e);
+        setError(/Failed to initialize TTS engine/i.test(message)
+          ? '휴대폰의 TTS 음성 엔진을 찾지 못했습니다. Android 설정에서 텍스트 음성 변환 엔진과 한국어·일본어 음성 데이터를 확인하세요. ('+message+')'
+          : message);
+      }}
     } catch(e) {
       if(mounted.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -103,7 +110,7 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
       .catch(e=>setError(String(e))).finally(()=>{if(mounted.current)setPhase('idle');});
   };
 
-  return <View style={styles.root}><ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+  return <View style={styles.root}><ScrollView contentContainerStyle={[styles.content,{paddingTop:insets.top+18}]} keyboardShouldPersistTaps="handled">
     <View style={styles.header}>
       <View style={{flex:1}}>
         <Text style={styles.eyebrow}>OFFLINE INTERPRETER</Text>
@@ -159,7 +166,7 @@ export const InterpreterScreen: React.FC<{navigation?:any}> = observer(({navigat
 
 const styles=StyleSheet.create({
   root:{flex:1,backgroundColor:colors.background},
-  content:{padding:20,paddingTop:42,paddingBottom:50},
+  content:{padding:20,paddingBottom:50},
   header:{flexDirection:'row',alignItems:'center',marginBottom:22},
   eyebrow:{fontSize:11,fontWeight:'800',color:colors.ko,letterSpacing:1.2},
   title:{fontSize:30,fontWeight:'800',color:colors.text,marginVertical:6},
