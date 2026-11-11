@@ -85,6 +85,19 @@ build=gradle.read_text()
 if 'implementation(files("libs/sherpa-onnx-2.0.1.aar"))' not in build:
     build += '\n// Pinned sherpa-onnx v2.0.1 Android release AAR, downloaded by CI.\n'
     build += 'dependencies { implementation(files("libs/sherpa-onnx-2.0.1.aar")) }\n'
+# Avoid duplicate ONNX Runtime libraries from onnxruntime-react-native and
+# sherpa-onnx Android AAR. For now retain one shared ABI binary; verify
+# ASR and TTS on device as these components may expect different ORT APIs.
+packaging = """
+android {
+    packaging {
+        jniLibs {
+            pickFirsts += ["lib/arm64-v8a/libonnxruntime.so"]
+        }
+    }
+}
+"""
+build += "\n" + packaging
 gradle.write_text(build)
 
 print("PocketPal interpreter overlay applied")
