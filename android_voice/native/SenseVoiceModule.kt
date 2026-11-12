@@ -58,6 +58,22 @@ class SenseVoiceModule(private val ctx: ReactApplicationContext) :
       .emit("SenseVoiceResult", data)
   }
 
+  private fun describeError(e: Throwable): String {
+    return generateSequence(e) { it.cause }.take(5).joinToString(" <- ") {
+      it.javaClass.simpleName + ": " + (it.message ?: "no message")
+    }
+  }
+
+  private fun loadNativeRuntime() {
+    try {
+      // A dedicated ONNX Runtime SONAME prevents clashes with RN ONNX Runtime.
+      System.loadLibrary("onnxruntime_sherpa")
+      System.loadLibrary("sherpa-onnx-jni")
+    } catch (e: Throwable) {
+      throw IllegalStateException("SenseVoice native libraries failed: " + describeError(e), e)
+    }
+  }
+
   private fun recognizerFor(lang: String, modelPath: String, tokensPath: String): OfflineRecognizer {
     if (recognizer != null && loadedLanguage == lang) return recognizer!!
     recognizer?.release()
@@ -108,6 +124,7 @@ class SenseVoiceModule(private val ctx: ReactApplicationContext) :
       var started = false
       var mic: AudioRecord? = null
       try {
+        loadNativeRuntime()
         val engine = recognizerFor(language, modelPath, tokensPath)
         val bufferSize = maxOf(
           AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT),
@@ -176,8 +193,10 @@ class SenseVoiceModule(private val ctx: ReactApplicationContext) :
           }
         }
       } catch (e: Throwable) {
-        if (!started) promise.reject("SENSEVOICE_START", e)
-        else emit("", 0, e.message ?: e.javaClass.simpleName)
+        val detail = describeError(e)
+        android.util.Log.e("SenseVoiceModule", "Native ASR failure: " + detail, e)
+        if (!started) promise.reject("SENSEVOICE_START", detail, e)
+        else emit("", 0, detail)
       } finally {
         try {mic?.stop()} catch (_: Throwable) {}
         try {mic?.release()} catch (_: Throwable) {}
