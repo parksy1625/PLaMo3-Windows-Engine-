@@ -106,6 +106,36 @@ jobs:
             --output android/app/libs/sherpa-onnx-2.0.1.aar
           echo "a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7  android/app/libs/sherpa-onnx-2.0.1.aar" | sha256sum --check
 
+      - name: Isolate sherpa ONNX Runtime shared library
+        working-directory: pocketpal
+        run: |
+          set -euo pipefail
+          # The PocketPal ONNX runtime and sherpa-onnx both ship libonnxruntime.so.
+          # Keeping only one can pass Gradle packaging but fail JNI initialization.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patchelf
+          mkdir -p .sherpa-unpacked
+          unzip -q android/app/libs/sherpa-onnx-2.0.1.aar -d .sherpa-unpacked
+          SHERPA_LIB=.sherpa-unpacked/jni/arm64-v8a
+          test -f "$SHERPA_LIB/libonnxruntime.so"
+          test -f "$SHERPA_LIB/libsherpa-onnx-jni.so"
+          patchelf --set-soname libonnxruntime_sherpa.so "$SHERPA_LIB/libonnxruntime.so"
+          mv "$SHERPA_LIB/libonnxruntime.so" "$SHERPA_LIB/libonnxruntime_sherpa.so"
+          for lib in "$SHERPA_LIB"/libsherpa-onnx-*.so; do
+            if readelf -d "$lib" | grep -q 'libonnxruntime.so'; then
+              patchelf --replace-needed libonnxruntime.so libonnxruntime_sherpa.so "$lib"
+            fi
+          done
+          for lib in "$SHERPA_LIB"/libsherpa-onnx-*.so; do
+            if readelf -d "$lib" | grep -q 'libonnxruntime.so'; then
+              echo "Unpatched ONNX dependency in $lib" >&2
+              exit 1
+            fi
+          done
+          readelf -d "$SHERPA_LIB/libsherpa-onnx-jni.so" | grep libonnxruntime_sherpa.so
+          rm android/app/libs/sherpa-onnx-2.0.1.aar
+          (cd .sherpa-unpacked && zip -qr ../android/app/libs/sherpa-onnx-2.0.1.aar .)
+
       - name: Build arm64 Android release APK
         working-directory: pocketpal/android
         run: |
@@ -115,13 +145,13 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p dist
-          cp pocketpal/android/app/build/outputs/apk/prod/release/app-prod-release.apk dist/PLaMoVoice-Redmi-SenseVoice-v0.3.apk
+          cp pocketpal/android/app/build/outputs/apk/prod/release/app-prod-release.apk dist/PLaMoVoice-Redmi-SenseVoice-v0.3.1.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PLaMoVoice-Redmi-SenseVoice-v0.3-APK
-          path: dist/PLaMoVoice-Redmi-SenseVoice-v0.3.apk
+          name: PLaMoVoice-Redmi-SenseVoice-v0.3.1-APK
+          path: dist/PLaMoVoice-Redmi-SenseVoice-v0.3.1.apk
           if-no-files-found: error
 
       - name: Upload build log if failed
